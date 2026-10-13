@@ -1,0 +1,25 @@
+{
+  "_meta": { "name": "English" },
+  "screen": {
+    "header": "Claude Code",
+    "session": "Session",
+    "week": "Week",
+    "resets": "Resets {time}",
+    "in_minutes": "in {n} min",
+    "in_hours": "in {h} h {m} min",
+    "in_days": "in {d} d {h} h",
+    "in_hours_whole": "in {n} h",
+    "in_days_whole": "in {n} d",
+    "updated": "Updated {time}",
+    "old": "Not updated",
+    "waiting": "Waiting for usage",
+    "choose_sensor": "Choose the usage sensor"
+  },
+  "app": {
+    "name": "Claude Code usage",
+    "summary": "Your Claude Code plan limits: the session and the week, how much is used and when it resets.",
+    "tile_name": "Claude Code usage",
+    "card_name": "Claude Code usage",
+    "tile_example": "Session 42% - resets 14:30"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "_meta": { "name": "Italiano" },
+  "screen": {
+    "header": "Claude Code",
+    "session": "Sessione",
+    "week": "Settimana",
+    "resets": "Si azzera {time}",
+    "in_minutes": "tra {n} min",
+    "in_hours": "tra {h} h {m} min",
+    "in_days": "tra {d} g {h} h",
+    "in_hours_whole": "tra {n} h",
+    "in_days_whole": "tra {n} g",
+    "updated": "Aggiornato {time}",
+    "old": "Non aggiornato",
+    "waiting": "In attesa dei dati",
+    "choose_sensor": "Scegli il sensore dell'uso"
+  },
+  "app": {
+    "name": "Uso di Claude Code",
+    "summary": "I limiti del tuo piano Claude Code: sessione e settimana, quanto hai usato e quando si azzerano.",
+    "tile_name": "Uso di Claude Code",
+    "card_name": "Uso di Claude Code",
+    "tile_example": "Sessione 42% - si azzera alle 14:30"
+  }
+}

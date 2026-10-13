@@ -1,0 +1,61 @@
+# What tools/preview.py shows (docs/PREVIEW.md of the plugins repository): the usage sensor as tools/push_usage.py
+# writes it, with a session half used and a week of Opus; a plan close to its limits; numbers that are old; and the tile
+# before a sensor is chosen. Moments are made from the time of the render ("{epoch+2h}" is in two hours).
+time_zone: Europe/Rome
+
+tiles:
+  - tile: usage
+    name: Claude Code
+    entity: sensor.claude_code_usage
+  - tile: usage
+    name: Close to the limit
+    entity: sensor.claude_code_near
+    sizes: [1x1, 2x1, 2x2]
+  - tile: usage
+    name: Old numbers
+    entity: sensor.claude_code_old
+    sizes: [1x1, 2x2]
+  - tile: usage
+    name: No sensor
+    sizes: [2x2]
+
+states:
+  sensor.claude_code_usage:
+    state: "42"
+    attributes:
+      friendly_name: Claude Code usage
+      unit_of_measurement: "%"
+      session_pct: 42
+      session_resets_at: "{epoch+2h}"
+      week_pct: 18
+      week_resets_at: "{epoch+3d}"
+      model_pct: 7
+      model_name: Opus
+      model_resets_at: "{epoch+3d}"
+      stale: false
+      updated_at: "{epoch-2m}"
+  sensor.claude_code_near:
+    state: "93"
+    attributes:
+      friendly_name: Claude Code usage
+      unit_of_measurement: "%"
+      session_pct: 93
+      session_resets_at: "{epoch+25m}"
+      week_pct: 78
+      week_resets_at: "{epoch+20h}"
+      stale: false
+      updated_at: "{epoch-1m}"
+  sensor.claude_code_old:
+    state: "12"
+    attributes:
+      friendly_name: Claude Code usage
+      unit_of_measurement: "%"
+      session_pct: 12
+      session_resets_at: "{epoch+4h}"
+      week_pct: 40
+      week_resets_at: "{epoch+5d}"
+      stale: true
+      updated_at: "{epoch-3h}"
+
+cards:
+  - { card: usage, entity: sensor.claude_code_usage }

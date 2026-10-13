@@ -1,0 +1,8 @@
+; Copy this file to push_usage.ini (beside push_usage.py) and fill it in. push_usage.ini is never committed.
+[home_assistant]
+; Home Assistant's address as this computer reaches it.
+url = http://homeassistant.local:8123
+; A long-lived access token: in Home Assistant, your profile, Security, Long-lived access tokens, Create token.
+token =
+; The sensor it writes; the tile offers every sensor with the usage's attributes.
+entity = sensor.claude_code_usage

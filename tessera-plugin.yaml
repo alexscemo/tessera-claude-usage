@@ -1,0 +1,39 @@
+# The manifest: who made the plugin, what it may do, and what the Tessera app shows. It holds no code and no words:
+# every name, label and hint below is a key into translations/<language>.json, part "app".
+# Every field is explained in docs/MANIFEST.md of the plugins repository.
+id: claude_usage
+version: 0.1.0
+api: "0.8"
+icon: robot
+maintainer: alexscemo
+license: MIT
+# beta while it finds its feet, stable once people use it every day, example when it is there to learn from.
+stage: beta
+topics: [tech]
+requires:
+  esphome: 2026.6.2
+boards: any
+flash_kb: 5
+
+tiles:
+  # A tile that belongs to one sensor of Home Assistant: sensor.claude_code_usage, which tools/push_usage.py on the
+  # computer that runs Claude Code writes every few minutes (see the README). Its state is the session's percentage;
+  # the attributes hold the session, the week and the week of one model, each a percentage and when it resets.
+  # Nothing is fetched from the internet by the app or the screen.
+  - id: usage
+    name: tile_name
+    icon: robot
+    sizes: { min: 1x1, max: 2x2 }
+    # Worst case, 2x2: a header, two rows of a name, a percentage, a reset time and a bar (track and fill).
+    memory: 1500
+    domains: [sensor]
+    attributes: [session_pct, session_resets_at, week_pct, week_resets_at, model_pct, model_name, model_resets_at,
+                 stale, updated_at]
+    # Offer only a sensor that has these, not every sensor in the house.
+    has_attributes: [session_pct, week_pct]
+    example: tile_example
+    # How the editor draws it: the sensor's name and the session's percentage.
+    preview: { title: "{name}", value: "{state}%" }
+
+cards:
+  - { id: usage, name: card_name }
