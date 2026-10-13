@@ -36,7 +36,8 @@ ogni 5 minuti. Né lo schermo né l'app Tessera parlano con Anthropic.
   successivi.
 - **Quando i numeri non si possono leggere:** se il login di Claude Code è scaduto, o Anthropic non risponde, il
   sensore tiene gli ultimi numeri e dice che sono vecchi. Il login si rinnova la prossima volta che usi Claude Code. Lo
-  script non lo rinnova mai da solo, perché disconnetterebbe Claude Code.
+  script non lo rinnova mai da solo, perché disconnetterebbe Claude Code. Anche i numeri vecchi di più di 15 minuti
+  vengono mostrati come vecchi, per esempio quando il computer è spento o in sospensione.
 - **Da dove vengono i numeri:** dall'indirizzo che Claude Code stesso usa per `/usage`. Anthropic non lo documenta,
   quindi una nuova versione di Claude Code potrebbe cambiarlo. In quel caso lo script scrive il problema in
   `tools/push_usage.log`.

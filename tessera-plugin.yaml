@@ -2,7 +2,7 @@
 # every name, label and hint below is a key into translations/<language>.json, part "app".
 # Every field is explained in docs/MANIFEST.md of the plugins repository.
 id: claude_usage
-version: 0.1.0
+version: 0.1.1
 api: "0.8"
 icon: robot
 maintainer: alexscemo

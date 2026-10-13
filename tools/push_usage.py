@@ -89,9 +89,12 @@ def epoch(text):
         return 0
 
 
-def percent(block):
-    value = block.get('utilization') if isinstance(block, dict) else None
-    return round(float(value), 1) if isinstance(value, (int, float)) else None
+def limit(block):
+    """A block of the usage answer as (percentage or None, reset in seconds since 1970 or 0)."""
+    block = block if isinstance(block, dict) else {}
+    value = block.get('utilization')
+    pct = round(float(value), 1) if isinstance(value, (int, float)) else None
+    return pct, epoch(block.get('resets_at'))
 
 
 def read_usage():
@@ -112,20 +115,17 @@ def read_usage():
     if not isinstance(answer, dict):
         raise UsageError('the usage answer is not what this script knows')
 
+    # A limit the plan lacks stays null: the tile hides it.
     attributes = {}
     for key, name in LIMITS:
-        block = answer.get(key)
-        attributes[f'{name}_pct'] = percent(block)
-        attributes[f'{name}_resets_at'] = epoch(block.get('resets_at')) if isinstance(block, dict) else 0
+        attributes[f'{name}_pct'], attributes[f'{name}_resets_at'] = limit(answer.get(key))
     if attributes['session_pct'] is None:
         raise UsageError('the usage answer has no five_hour limit: is this login a Claude plan (Pro or Max)?')
-    if attributes['week_pct'] is None:
-        attributes['week_pct'] = 0.0
     # The week of one model, on plans that have one: the first that is there.
     for key, label in MODELS:
-        block = answer.get(key)
-        if percent(block) is not None:
-            attributes.update(model_pct=percent(block), model_name=label, model_resets_at=epoch(block.get('resets_at')))
+        pct, resets_at = limit(answer.get(key))
+        if pct is not None:
+            attributes.update(model_pct=pct, model_name=label, model_resets_at=resets_at)
             break
     return attributes
 

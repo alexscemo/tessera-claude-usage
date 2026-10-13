@@ -1,7 +1,6 @@
 #include "claude_usage.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <string>
 
 namespace esphome::claude_usage {
@@ -17,17 +16,16 @@ enum { SESSION = 0, WEEK = 1, MODEL = 2, LIMITS = 3 };
 // From BUSY_PCT the bar is amber (nearly used up), from ALERT_PCT the percentage is red as well.
 static constexpr int BUSY_PCT = 75;
 static constexpr int ALERT_PCT = 90;
+// Numbers older than this are drawn as old: the computer that sends them is off, asleep or failing.
+static constexpr uint32_t MAX_AGE = 15 * 60;
 
-// A number as Home Assistant's attribute has it: a JSON number, or a text of one. -1 when there is none.
-static float number(JsonVariantConst v) {
-  if (v.isNull()) return -1;
-  if (v.is<const char *>()) {
-    const char *s = v.as<const char *>();
-    char *end = nullptr;
-    const float f = strtof(s, &end);
-    return end == s ? -1 : f;
-  }
-  return v.as<float>();
+// Shows or hides a part, touching it only when that changes: LVGL redraws a part whose flag is set again.
+static void set_hidden(lv_obj_t *o, bool hidden) {
+  if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hidden) return;
+  if (hidden)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
 // What sensor.claude_code_usage says (README.md): one percentage and one moment of reset per limit.
@@ -35,35 +33,33 @@ struct Usage {
   float pct[LIMITS] = {-1, -1, -1};
   uint32_t resets_at[LIMITS] = {0, 0, 0};
   uint32_t updated_at = 0;
-  std::string model_name, wait;
-  bool has_entity = false, no_value = false, stale = false;
+  std::string model_name;
+  const char *blocked = nullptr;  // why the sensor itself gives nothing to show, a key of translations
+  bool stale = false;
 
   void read(JsonObjectConst data) {
     JsonObjectConst a = data["attributes"];
     static const char *const PCT[LIMITS] = {"session_pct", "week_pct", "model_pct"};
     static const char *const AT[LIMITS] = {"session_resets_at", "week_resets_at", "model_resets_at"};
     for (int i = 0; i < LIMITS; ++i) {
-      pct[i] = number(a[PCT[i]]);
+      pct[i] = a[PCT[i]] | -1.0f;
       resets_at[i] = a[AT[i]] | 0u;
     }
     updated_at = a["updated_at"] | 0u;
     model_name = std::string(a["model_name"] | "");
     stale = a["stale"] | false;
     // Before a person has chosen the sensor the tile gets {}; a sensor without a value says unavailable or unknown.
-    has_entity = !data["state"].isNull();
-    const std::string state = std::string(data["state"] | "");
-    no_value = state == "unavailable" || state == "unknown";
-    wait = std::string(data["wait"] | "");
+    const std::string state = std::string(data["state"] | ""), wait = std::string(data["wait"] | "");
+    blocked = data["state"].isNull() || wait == "wrong_entity"                  ? "choose_sensor"
+              : !wait.empty() || state == "unavailable" || state == "unknown" ? "waiting"
+                                                                                : nullptr;
   }
 
   // Why there is nothing to show (a key of translations, part screen), or nullptr.
-  const char *message(uint32_t now) const {
-    if (!has_entity || wait == "wrong_entity") return "choose_sensor";
-    if (!wait.empty() || no_value || !now || pct[SESSION] < 0) return "waiting";
-    return nullptr;
-  }
+  const char *message(uint32_t now) const { return blocked ? blocked : !now || pct[SESSION] < 0 ? "waiting" : nullptr; }
 
-  bool has(int limit) const { return pct[limit] >= 0; }
+  // The numbers are old: the computer said so, or it has sent none for a while.
+  bool old(uint32_t now) const { return stale || (updated_at && now > updated_at + MAX_AGE); }
 
   // The percentage now: once the moment of reset has passed the limit starts again from nothing, even before the
   // computer sends the new numbers.
@@ -87,12 +83,16 @@ static std::string countdown(const tessera::Plugin *plugin, uint32_t at, uint32_
   return tessera::fill(t.c_str(), days ? "h" : "m", std::to_string(small));
 }
 
-// "Resets 14:30 · in 2 h 10 min", or with the day when it is not today: "Resets Thu 15 Oct 09:00 · in 2 d 1 h".
+// "14:30", or with the day when it is not today: "Thu 15 Oct 09:00".
+static std::string moment_text(uint32_t at) {
+  const std::string time = tessera::clock_text(at);
+  return tessera::days_from_today(at) != 0 ? tessera::date_text(at) + " " + time : time;
+}
+
+// "Resets 14:30 · in 2 h 10 min".
 static std::string resets_text(const tessera::Plugin *plugin, uint32_t at, uint32_t now) {
   if (!at || !now || at <= now) return "";
-  std::string when = tessera::clock_text(at);
-  if (tessera::days_from_today(at) != 0) when = tessera::date_text(at) + " " + when;
-  return tessera::fill(plugin->text("resets"), "time", when) + " · " + countdown(plugin, at, now);
+  return tessera::fill(plugin->text("resets"), "time", moment_text(at)) + " · " + countdown(plugin, at, now);
 }
 
 static std::string name_of(const tessera::Plugin *plugin, const Usage &u, int limit) {
@@ -126,14 +126,13 @@ class Meter {
     x_ = x;
     w_ = std::max(1, w);
     bar_ = bar;
-    const int fixed = bar + 2 * gap() + ui::line_height(Font::BODY);
-    pct_font_ = Font::TITLE;
     for (Font f : {Font::VALUE, Font::HEADLINE, Font::TITLE}) {
       pct_font_ = f;
-      if (fixed + ui::line_height(f) <= h && ui::text_width("100%", f) <= w_ * 6 / 10) break;
+      if (height(f, bar) <= h && ui::text_width("100%", f) <= w_ * 6 / 10) break;
     }
     line_ = ui::line_height(pct_font_);
-    y_ = y + std::max(0, (h - fixed - line_) / 2);
+    y_ = y + std::max(0, (h - height(pct_font_, bar)) / 2);
+    painted_pct_ = -1;  // the percentage and the name are placed again on the next paint
     ui::set_font(pct_, pct_font_);
     // The name never larger than the percentage beside it.
     name_font_ = pct_font_ == Font::TITLE ? Font::BODY : name_large_;
@@ -147,35 +146,37 @@ class Meter {
 
   // The texts and the bar; pct < 0 hides it all. `old`: the numbers are not fresh, so they are drawn quieter.
   void paint(const std::string &name, int pct, const std::string &when, bool old) {
-    const bool shown = pct >= 0;
-    show(shown);
-    if (!shown) return;
-    // The percentage as wide as it is, the name in what is left of the line, on the percentage's foot.
-    const std::string value = std::to_string(pct) + "%";
-    const int pw = std::min(w_, ui::text_width(value, pct_font_) + ui::px(2));
-    ui::set_text(pct_, value);
-    lv_obj_set_size(pct_, pw, line_);
-    lv_obj_set_pos(pct_, x_, y_);
-    ui::set_tone(pct_, !old && pct >= ALERT_PCT ? Tone::ALERT : Tone::NORMAL, old ? theme::MUTED : theme::INK);
-    const int space = ui::px(6), nh = ui::line_height(name_font_);
-    const int nw = w_ - pw - space;
-    if (nw < ui::text_width(name, name_font_) / 2) {
-      lv_obj_add_flag(name_, LV_OBJ_FLAG_HIDDEN);  // no room for the name: the percentage alone says it
-    } else {
-      ui::set_text(name_, name);
-      lv_obj_set_size(name_, nw, nh);
-      lv_obj_set_pos(name_, x_ + pw + space, y_ + std::max(0, line_ - nh - ui::px(2)));
+    if (pct < 0) {
+      for (lv_obj_t *o : {name_, pct_, track_, fill_, when_}) set_hidden(o, true);
+      painted_pct_ = -1;
+      return;
     }
-    ui::set_text(when_, when);
-    const int fw = std::min(w_, w_ * std::clamp(pct, 0, 100) / 100);
-    if (fw < bar_) {
-      lv_obj_add_flag(fill_, LV_OBJ_FLAG_HIDDEN);  // too short to draw as a rounded bar
-    } else {
-      lv_obj_clear_flag(fill_, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_set_size(fill_, fw, bar_);
+    for (lv_obj_t *o : {pct_, track_, when_}) set_hidden(o, false);
+    // Measured and placed only when the percentage or the name changed, not on every tick.
+    if (pct != painted_pct_ || name != painted_name_) {
+      painted_pct_ = pct;
+      painted_name_ = name;
+      // The percentage as wide as it is, the name in what is left of the line, on the percentage's foot.
+      const std::string value = std::to_string(pct) + "%";
+      const int pw = std::min(w_, ui::text_width(value, pct_font_) + ui::px(2));
+      ui::set_text(pct_, value);
+      lv_obj_set_size(pct_, pw, line_);
+      lv_obj_set_pos(pct_, x_, y_);
+      const int space = ui::px(6), nh = ui::line_height(name_font_);
+      const int nw = w_ - pw - space;
+      set_hidden(name_, nw < ui::text_width(name, name_font_) / 2);  // no room: the percentage alone says it
+      ui::set_text(name_, name);
+      lv_obj_set_size(name_, std::max(1, nw), nh);
+      lv_obj_set_pos(name_, x_ + pw + space, y_ + std::max(0, line_ - nh - ui::px(2)));
+      const int fw = std::min(w_, w_ * std::clamp(pct, 0, 100) / 100);
+      set_hidden(fill_, fw < bar_);  // too short to draw as a rounded bar
+      lv_obj_set_size(fill_, std::max(1, fw), bar_);
       lv_obj_set_pos(fill_, x_, bar_y_);
     }
+    ui::set_tone(pct_, !old && pct >= ALERT_PCT ? Tone::ALERT : Tone::NORMAL, old ? theme::MUTED : theme::INK);
+    ui::set_text(when_, when);
     // The bar in the accent, amber when the limit is nearly used up, grey when the numbers are old.
+    // TODO: once the manifest moves to api 0.9, its block fill by tone replaces fill_role_ and paint_fill().
     const theme::Role role = old ? theme::MUTED : pct >= BUSY_PCT ? theme::MARK_AMBER : theme::ACCENT;
     if (role != fill_role_) {
       fill_role_ = role;
@@ -193,20 +194,12 @@ class Meter {
   static int gap() { return ui::px(ui::large() ? 5 : 3); }
 
  private:
-  void show(bool on) {
-    for (lv_obj_t *o : {name_, pct_, track_, fill_, when_}) {
-      if (on)
-        lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
-      else
-        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
   void paint_fill() { lv_obj_set_style_bg_color(fill_, ui::color(fill_role_), 0); }
 
   Font name_font_ = Font::BODY, name_large_ = Font::BODY, pct_font_ = Font::VALUE;
   theme::Role fill_role_ = theme::ACCENT;
-  int x_ = 0, y_ = 0, w_ = 1, bar_ = 1, bar_y_ = 0, line_ = 1;
+  int x_ = 0, y_ = 0, w_ = 1, bar_ = 1, bar_y_ = 0, line_ = 1, painted_pct_ = -1;
+  std::string painted_name_;
   lv_obj_t *name_{}, *pct_{}, *track_{}, *fill_{}, *when_{};
 };
 
@@ -217,42 +210,39 @@ class UsageTile : public tessera::Tile {
   explicit UsageTile(const tessera::Plugin *plugin) : plugin_(plugin) {}
 
   void create(const tessera::TileContext &c) override {
-    width_ = c.width;
-    height_ = c.height;
-    name_ = c.name;
+    const int width = c.width, height = c.height, bar = ui::px(ui::large() ? 8 : 6);
+    const std::string name = c.name;
     entity_ = c.entity;
     tile_ = c.tile;
-    bar_ = ui::px(ui::large() ? 8 : 6);
     count_ = c.columns >= 2 || c.rows >= 2 ? 2 : 1;
-    stacked_ = c.rows >= 2;
+    const bool stacked = c.rows >= 2;
     const int head = ui::line_height(Font::TITLE) + Meter::gap();
-    // The header only where the two limits under it still get large figures.
-    has_head_ = stacked_ && height_ - head >= 2 * Meter::height(Font::HEADLINE, bar_) + Meter::gap();
 
     message_ = ui::label(c.parent, Font::BODY_LARGE, theme::MUTED);
-    lv_obj_set_size(message_, width_, ui::line_height(Font::BODY_LARGE));
-    lv_obj_set_pos(message_, 0, (height_ - ui::line_height(Font::BODY_LARGE)) / 2);
+    lv_obj_set_size(message_, width, ui::line_height(Font::BODY_LARGE));
+    lv_obj_set_pos(message_, 0, (height - ui::line_height(Font::BODY_LARGE)) / 2);
     lv_obj_set_style_text_align(message_, LV_TEXT_ALIGN_CENTER, 0);
-    if (has_head_) {
+    // The header only where the two limits under it still get large figures.
+    if (stacked && height - head >= 2 * Meter::height(Font::HEADLINE, bar) + Meter::gap()) {
       head_ = ui::label(c.parent, Font::TITLE, theme::INK);
-      lv_obj_set_size(head_, width_, ui::line_height(Font::TITLE));
+      lv_obj_set_size(head_, width, ui::line_height(Font::TITLE));
       lv_obj_set_pos(head_, 0, 0);
       lv_label_set_long_mode(head_, LV_LABEL_LONG_CLIP);
-      ui::set_text(head_, name_.empty() ? plugin_->text("header") : name_);
+      ui::set_text(head_, name.empty() ? plugin_->text("header") : name);
     }
 
-    const int top = has_head_ ? head : 0;
+    const int top = head_ ? head : 0;
     const int col_gap = ui::px(ui::large() ? 16 : 10);
     for (int i = 0; i < count_; ++i) {
       meters_[i].make(c.parent, Font::BODY);
       if (count_ == 1)
-        meters_[i].place(0, 0, width_, height_, bar_);
-      else if (stacked_) {
-        const int h = (height_ - top - Meter::gap()) / 2;
-        meters_[i].place(0, top + i * (h + Meter::gap()), width_, h, bar_);
+        meters_[i].place(0, 0, width, height, bar);
+      else if (stacked) {
+        const int h = (height - top - Meter::gap()) / 2;
+        meters_[i].place(0, top + i * (h + Meter::gap()), width, h, bar);
       } else {
-        const int w = (width_ - col_gap) / 2;
-        meters_[i].place(i * (w + col_gap), 0, w, height_, bar_);
+        const int w = (width - col_gap) / 2;
+        meters_[i].place(i * (w + col_gap), 0, w, height, bar);
       }
     }
   }
@@ -268,16 +258,11 @@ class UsageTile : public tessera::Tile {
         continue;
       }
       // When it resets, or that the numbers are old: the tile has room for one line under the bar.
-      const std::string when =
-          usage_.stale ? plugin_->text("old") : countdown(plugin_, usage_.resets_at[i], now);
-      meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now), when, usage_.stale);
+      const bool old = usage_.old(now);
+      const std::string when = old ? plugin_->text("old") : countdown(plugin_, usage_.resets_at[i], now);
+      meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now), when, old);
     }
-    if (head_) {
-      if (why)
-        lv_obj_add_flag(head_, LV_OBJ_FLAG_HIDDEN);
-      else
-        lv_obj_clear_flag(head_, LV_OBJ_FLAG_HIDDEN);
-    }
+    if (head_) set_hidden(head_, why != nullptr);
   }
 
   void on_theme() override {
@@ -290,9 +275,8 @@ class UsageTile : public tessera::Tile {
 
  private:
   const tessera::Plugin *plugin_;
-  int width_ = 0, height_ = 0, bar_ = 1, count_ = 1, tile_ = -1;
-  bool stacked_ = false, has_head_ = false;
-  std::string name_, entity_;
+  int count_ = 1, tile_ = -1;
+  std::string entity_;
   lv_obj_t *message_{}, *head_{};
   Meter meters_[2];
   Usage usage_;
@@ -313,7 +297,6 @@ class UsageCard : public tessera::Card {
     lv_label_set_long_mode(note_, LV_LABEL_LONG_CLIP);
     lv_obj_set_size(note_, width_, ui::line_height(Font::BODY));
     lv_obj_set_pos(note_, 0, height_ - ui::line_height(Font::BODY));
-    shown_ = -1;
   }
 
   void on_state(JsonObjectConst data) override {
@@ -347,28 +330,26 @@ class UsageCard : public tessera::Card {
 
   void render() {
     const char *why = usage_.message(now_);
-    const int count = why ? 0 : usage_.has(MODEL) ? 3 : 2;
+    const int count = why ? 0 : usage_.pct[MODEL] >= 0 ? 3 : 2;
+    const bool old = usage_.old(now_);
     layout(count);
+    // A limit the sensor lacks has the percentage -1, which paint() hides.
     for (int i = 0; i < LIMITS; ++i) {
-      if (i >= count || !usage_.has(i)) {
+      if (i < count)
+        meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now_),
+                         resets_text(plugin_, usage_.resets_at[i], now_), old);
+      else
         meters_[i].paint("", -1, "", false);
-        continue;
-      }
-      meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now_),
-                       resets_text(plugin_, usage_.resets_at[i], now_), usage_.stale);
     }
+    // "Not updated · Updated Thu 15 Oct 09:00", or why there is nothing to show.
     std::string note;
     if (why)
       note = plugin_->text(why);
-    else if (usage_.updated_at) {
-      std::string when = tessera::clock_text(usage_.updated_at);
-      if (tessera::days_from_today(usage_.updated_at) != 0) when = tessera::date_text(usage_.updated_at) + " " + when;
-      note = tessera::fill(plugin_->text("updated"), "time", when);
-      if (usage_.stale) note = std::string(plugin_->text("old")) + " · " + note;
-    } else if (usage_.stale)
-      note = plugin_->text("old");
+    else {
+      if (usage_.updated_at) note = tessera::fill(plugin_->text("updated"), "time", moment_text(usage_.updated_at));
+      if (old) note = note.empty() ? std::string(plugin_->text("old")) : plugin_->text("old") + std::string(" · ") + note;
+    }
     ui::set_text(note_, note);
-    ui::set_color(note_, theme::MUTED);
   }
 
   const tessera::Plugin *plugin_;

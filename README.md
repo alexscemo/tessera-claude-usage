@@ -36,7 +36,8 @@ sensor every 5 minutes. Neither the screen nor the Tessera app talks to Anthropi
   numbers.
 - **When the numbers can't be read:** if Claude Code's login has expired, or Anthropic doesn't answer, the sensor keeps
   its last numbers and says they are old. The login renews the next time you use Claude Code. The script never renews it
-  itself, because that would log Claude Code out.
+  itself, because that would log Claude Code out. Numbers more than 15 minutes old are also shown as old, for example
+  when the computer is off or asleep.
 - **Where the numbers come from:** the address Claude Code itself uses for `/usage`. Anthropic doesn't document it, so a
   new version of Claude Code may change it. If that happens, the script logs the problem in `tools/push_usage.log`.
 - **After Home Assistant restarts:** a sensor written this way is gone until the next send, at most 5 minutes later.
