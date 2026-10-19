@@ -32,8 +32,8 @@ sensor every 5 minutes. Neither the screen nor the Tessera app talks to Anthropi
   - A wider tile shows the session and the week side by side.
   - A taller tile shows them one above the other, under the tile's name.
 - **Colours:** the bar is a warm orange, amber from 75% and red from 90%; the percentage turns red from 90%.
-- **The spark:** Claude's spark sits beside the session. It turns and its rays breathe while Claude Code is in use (the
-  session rose since the numbers before), stands still otherwise, and goes grey when the numbers are old.
+- **Clawd:** Claude Code's mascot stands beside the session and blinks every few seconds. He walks on the spot while
+  Claude Code is in use (the session rose since the numbers before), and goes grey when the numbers are old.
 - **Resets:** once a reset time has passed, the tile counts that limit as 0% right away, without waiting for the next
   numbers.
 - **When the numbers can't be read:** if Claude Code's login has expired, or Anthropic doesn't answer, the sensor keeps

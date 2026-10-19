@@ -156,7 +156,7 @@ class Meter {
     if (caption) at += body + gap();
     figure_y_ = at;
     ui::set_font(pct_, font_);
-    lv_obj_set_size(pct_, w, line);
+    lv_obj_set_size(pct_, std::min(w, ui::text_width("100%", font_) + ui::px(2)), line);  // Clawd has the rest
     lv_obj_set_pos(pct_, x, at);
     at += line + gap();
     x_ = x;
@@ -204,12 +204,12 @@ class Meter {
 
   static int gap() { return ui::px(ui::large() ? 5 : 3); }
 
-  // Where the spark goes: at the right end of the percentage's line, about as high as its figures.
-  void spark_box(int &x, int &y, int &size) const {
-    const int line = ui::line_height(font_);
-    size = line * 7 / 10;
-    x = x_ + w_ - size;
-    y = figure_y_ + (line - size) / 2;
+  // The room for Clawd: the right end of the percentage's line, beside the widest percentage there can be.
+  void mascot_room(int &right, int &y, int &line, int &width) const {
+    right = x_ + w_;
+    y = figure_y_;
+    line = ui::line_height(font_);
+    width = w_ - ui::text_width("100%", font_) - ui::px(2) - gap();
   }
 
  private:
@@ -222,89 +222,114 @@ class Meter {
   lv_obj_t *name_{}, *pct_{}, *track_{}, *fill_{}, *when_{};
 };
 
-// Claude's spark: twelve rays of uneven length from one centre, drawn as one line that goes out to each tip and back.
-// It stands still, and while Claude Code works its rays breathe and it turns slowly, as the spark of Claude's desktop
-// app does while it answers. LVGL moves it frame by frame, as the core moves its own alarm tile.
-class Spark {
+// Clawd, Claude Code's mascot, as its welcome screen draws him in blocks: a body of 12 by 4 pixels with two eyes, an
+// arm out on each side and four legs, each pixel twice as tall as it is wide. He stands and blinks every few seconds;
+// while Claude Code works he walks on the spot. LVGL moves him frame by frame, as the core moves its own alarm tile.
+class Clawd {
  public:
-  ~Spark() {
-    if (line_) lv_anim_delete(line_, nullptr);  // no frame may reach this after it is gone
+  ~Clawd() {
+    if (box_) lv_anim_delete(box_, nullptr);  // no frame may reach this after it is gone
   }
 
   void make(lv_obj_t *parent) {
-    line_ = lv_line_create(parent);
-    lv_obj_remove_flag(line_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_line_rounded(line_, true, 0);
+    box_ = lv_obj_create(parent);
+    lv_obj_remove_style_all(box_);
+    lv_obj_remove_flag(box_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(box_, LV_OBJ_FLAG_SCROLLABLE);
+    for (lv_obj_t *&o : parts_) {
+      o = ui::block(box_, theme::ENERGY_SOLAR);
+      lv_obj_set_style_radius(o, 0, 0);  // pixels, square
+    }
     on_theme();
   }
 
-  void place(int x, int y, int size) {
-    size_ = std::max(6, size);
-    width_ = std::max(2, size_ / 8);
-    lv_obj_set_size(line_, size_, size_);
-    lv_obj_set_pos(line_, x, y);
-    lv_obj_set_style_line_width(line_, width_, 0);
-    draw(phase_);
+  // As large as fits `line` high and `width` wide, in whole pixels, at the right end of the line; none if too narrow.
+  void place(int right, int y, int line, int width) {
+    unit_ = std::min(line * 8 / 10 / ROWS, width / COLUMNS);
+    fits_ = unit_ >= 1;
+    unit_ = std::max(1, unit_);
+    // Room above for the bob of his walk.
+    lv_obj_set_size(box_, COLUMNS * unit_, ROWS * unit_ + unit_);
+    lv_obj_set_pos(box_, right - COLUMNS * unit_, y + (line - ROWS * unit_) / 2 - unit_);
+    draw(step_, closed_);
   }
 
-  // Grey when the numbers are old, moving while Claude Code works, gone while there are no numbers to stand beside.
-  void paint(bool working, bool old, bool shown) {
-    set_hidden(line_, !shown);
+  // Grey when the numbers are old, walking while Claude Code works, gone while there are no numbers to stand beside.
+  void paint(bool working, bool old, bool shown, uint32_t now) {
+    shown = shown && fits_;
+    set_hidden(box_, !shown);
     working = working && shown;
     const theme::Role role = old ? theme::MUTED : theme::ENERGY_SOLAR;
     if (role != role_) {
       role_ = role;
       on_theme();
     }
-    if (working == working_) return;
-    working_ = working;
-    lv_anim_delete(line_, nullptr);
-    if (!working) {
-      draw(0);  // at rest, the spark as Claude draws it
-      return;
+    if (working != working_) {
+      working_ = working;
+      lv_anim_delete(box_, nullptr);
+      draw(0, false);
+      if (working) run(WALK, 2, 700, LV_ANIM_REPEAT_INFINITE);
+    } else if (shown && !working && now % BLINK == 0) {
+      run(BLINK_SHUT, 1, 180, 1);
     }
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, line_);
-    lv_anim_set_values(&a, 0, TURN);
-    lv_anim_set_duration(&a, 12000);
-    lv_anim_set_custom_exec_cb(&a, frame);
-    lv_anim_set_user_data(&a, this);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_start(&a);
   }
 
-  void on_theme() { lv_obj_set_style_line_color(line_, ui::color(role_), 0); }
+  void on_theme() {
+    for (lv_obj_t *o : parts_) lv_obj_set_style_bg_color(o, ui::color(role_), 0);
+    for (int e = EYE; e < LEG; ++e) lv_obj_set_style_bg_color(parts_[e], ui::color(theme::QR_DARK), 0);
+  }
 
  private:
-  static constexpr int RAYS = 12, TURN = 3600;  // the phase in tenths of a degree: one turn a period
+  static constexpr int COLUMNS = 16, ROWS = 10;  // in units: a pixel of his is 1 unit wide and 2 high
+  static constexpr uint32_t BLINK = 6;           // seconds between blinks while he stands
+  enum Move { WALK, BLINK_SHUT };
+  enum { BODY = 0, ARMS = 1, EYE = 2, LEG = 4, PARTS = 8 };
 
-  static void frame(lv_anim_t *a, int32_t phase) { static_cast<Spark *>(lv_anim_get_user_data(a))->draw(phase); }
+  // A walk is two steps over its period; a blink shuts his eyes until its end (the value 1).
+  void run(Move move, int32_t end, uint32_t ms, uint32_t repeat) {
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, box_);
+    lv_anim_set_values(&a, 0, end);
+    lv_anim_set_duration(&a, ms);
+    lv_anim_set_custom_exec_cb(&a, move == WALK ? walk : blink);
+    lv_anim_set_user_data(&a, this);
+    lv_anim_set_repeat_count(&a, repeat);
+    lv_anim_start(&a);
+  }
+  static void walk(lv_anim_t *a, int32_t v) { static_cast<Clawd *>(lv_anim_get_user_data(a))->draw(v % 2, false); }
+  static void blink(lv_anim_t *a, int32_t v) { static_cast<Clawd *>(lv_anim_get_user_data(a))->draw(0, v < 1); }
 
-  void draw(int32_t phase) {
-    // The rays' lengths, and each a little off its even angle, so it reads as drawn by hand as Claude's own.
-    static constexpr float LENGTH[RAYS] = {1.0f, 0.74f, 0.92f, 0.68f, 0.97f, 0.8f, 0.94f, 0.7f, 1.0f, 0.78f, 0.9f, 0.72f};
-    static constexpr float SKEW[RAYS] = {0.0f, 0.06f, -0.04f, 0.05f, -0.03f, 0.04f, 0.0f, -0.05f, 0.03f, -0.04f, 0.05f, -0.02f};
-    constexpr float PI = 3.14159265f;
-    phase_ = phase;
-    const float centre = size_ / 2.0f, reach = centre - width_ / 2.0f, t = phase * 2 * PI / TURN;
-    for (int i = 0; i < RAYS; ++i) {
-      // Moving: one turn a period, and each ray breathes four times in it, each at its own moment.
-      const float breath = working_ ? 0.8f + 0.2f * sinf(4 * t + i * 1.9f) : 1.0f;
-      const float angle = i * 2 * PI / RAYS + SKEW[i] + (working_ ? t : 0), len = reach * LENGTH[i] * breath;
-      points_[2 * i] = {(lv_value_precise_t) centre, (lv_value_precise_t) centre};
-      points_[2 * i + 1] = {(lv_value_precise_t) (centre + len * cosf(angle)),
-                            (lv_value_precise_t) (centre + len * sinf(angle))};
+  // `step` 1 lifts him by one unit on his back legs, the front ones off the ground; `closed` shuts his eyes.
+  void draw(int step, bool closed) {
+    if (step == step_ && closed == closed_ && unit_ == drawn_unit_) return;  // a frame that changes nothing
+    step_ = step;
+    closed_ = closed;
+    drawn_unit_ = unit_;
+    const int u = unit_, px = 2 * u, top = u - step * u;  // a pixel is u wide and px high; top: his body's top
+    auto set = [](lv_obj_t *o, int x, int y, int w, int h) {
+      lv_obj_set_pos(o, x, y);
+      lv_obj_set_size(o, std::max(1, w), std::max(1, h));
+    };
+    set(parts_[BODY], 2 * u, top, 12 * u, 4 * px);
+    set(parts_[ARMS], 0, top + 2 * px, 16 * u, px);
+    const int eye = closed ? std::max(1, px / 4) : px;
+    set(parts_[EYE], 4 * u, top + 2 * px - eye, u, eye);
+    set(parts_[EYE + 1], 11 * u, top + 2 * px - eye, u, eye);
+    const int ground = u + 5 * px;
+    for (int i = 0; i < 4; ++i) {
+      static constexpr int AT[4] = {3, 5, 10, 12};
+      // Lifted, the outer legs stay on the ground and stretch; the inner ones go up with him.
+      const bool planted = step && (i == 0 || i == 3);
+      const int leg_top = top + 4 * px;
+      set(parts_[LEG + i], AT[i] * u, leg_top, u, planted ? ground - leg_top : px);
     }
-    lv_line_set_points(line_, points_, 2 * RAYS);
   }
 
-  lv_obj_t *line_{};
-  lv_point_precise_t points_[2 * RAYS]{};
+  lv_obj_t *box_{}, *parts_[PARTS]{};
   theme::Role role_ = theme::ENERGY_SOLAR;
-  bool working_ = false;
-  int32_t phase_ = 0;
-  int size_ = 6, width_ = 2;
+  bool working_ = false, closed_ = false, fits_ = true;
+  int unit_ = 1, drawn_unit_ = 0, step_ = 0;
 };
 
 // The tile. 1x1: the session alone. Wider: the session and the week side by side. Taller: one above the other, under a
@@ -349,10 +374,11 @@ class UsageTile : public tessera::Tile {
         meters_[i].place(i * (w + col_gap), 0, w, height, bar);
       }
     }
-    int x, y, size;
-    meters_[0].spark_box(x, y, size);
-    spark_.make(c.parent);
-    spark_.place(x, y, size);
+    // Clawd at the right of the first limit's percentage.
+    int right, y, line, room;
+    meters_[0].mascot_room(right, y, line, room);
+    clawd_.make(c.parent);
+    clawd_.place(right, y, line, room);
   }
 
   void on_state(JsonObjectConst data) override { usage_.read(data); }
@@ -371,14 +397,14 @@ class UsageTile : public tessera::Tile {
       meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now), when, old);
     }
     if (head_) set_hidden(head_, why != nullptr);
-    spark_.paint(usage_.working && !usage_.old(now), usage_.old(now), !why);
+    clawd_.paint(usage_.working && !usage_.old(now), usage_.old(now), !why, now);
   }
 
   void on_theme() override {
     ui::set_color(message_, theme::MUTED);
     if (head_) ui::set_color(head_, theme::INK);
     for (int i = 0; i < count_; ++i) meters_[i].on_theme();
-    spark_.on_theme();
+    clawd_.on_theme();
   }
 
   void on_tap() override { tessera::open_card(plugin_->plugin_id(), "usage", entity_, tile_); }
@@ -389,7 +415,7 @@ class UsageTile : public tessera::Tile {
   std::string entity_;
   lv_obj_t *message_{}, *head_{};
   Meter meters_[2];
-  Spark spark_;
+  Clawd clawd_;
   Usage usage_;
 };
 
@@ -408,7 +434,7 @@ class UsageCard : public tessera::Card {
     lv_label_set_long_mode(note_, LV_LABEL_LONG_CLIP);
     lv_obj_set_size(note_, width_, ui::line_height(Font::BODY));
     lv_obj_set_pos(note_, 0, height_ - ui::line_height(Font::BODY));
-    spark_.make(c.parent);
+    clawd_.make(c.parent);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -423,7 +449,7 @@ class UsageCard : public tessera::Card {
 
   void on_theme() override {
     for (auto &m : meters_) m.on_theme();
-    spark_.on_theme();
+    clawd_.on_theme();
     ui::set_color(note_, theme::MUTED);
     render();
   }
@@ -439,9 +465,10 @@ class UsageCard : public tessera::Card {
     // they stay together at the top instead of spreading over the glass.
     const int h = count ? std::min((room - (count - 1) * gap) / count, Meter::height(Font::DIGITS, bar_) + gap) : 0;
     for (int i = 0; i < count; ++i) meters_[i].place(0, i * (h + gap), width_, h, bar_);
-    int x, y, size;
-    meters_[0].spark_box(x, y, size);
-    spark_.place(x, y, size);
+    // Clawd at the right of the first limit's percentage.
+    int right, y, line, width;
+    meters_[0].mascot_room(right, y, line, width);
+    clawd_.place(right, y, line, width);
   }
 
   void render() {
@@ -466,7 +493,7 @@ class UsageCard : public tessera::Card {
       if (old) note = note.empty() ? std::string(plugin_->text("old")) : plugin_->text("old") + std::string(" · ") + note;
     }
     ui::set_text(note_, note);
-    spark_.paint(usage_.working && !old, old, !why);
+    clawd_.paint(usage_.working && !old, old, !why, now_);
   }
 
   const tessera::Plugin *plugin_;
@@ -474,7 +501,7 @@ class UsageCard : public tessera::Card {
   uint32_t now_ = 0;
   lv_obj_t *note_{};
   Meter meters_[LIMITS];
-  Spark spark_;
+  Clawd clawd_;
   Usage usage_;
 };
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+- Clawd, Claude Code's mascot, takes the place of the spark: he blinks every few seconds, and walks on the spot while
+  Claude Code is in use.
+
 ## 0.2.0
 - A new look after Claude's own: each limit has a small caption in capitals, its percentage in the largest figures, a
   thin bar in a warm orange (amber from 75%, red from 90%) and a quieter line about when it resets.

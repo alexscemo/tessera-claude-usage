@@ -32,8 +32,8 @@ ogni 5 minuti. Né lo schermo né l'app Tessera parlano con Anthropic.
   - Una tile più larga mostra sessione e settimana affiancate.
   - Una tile più alta le mostra una sopra l'altra, sotto il nome della tile.
 - **Colori:** la barra è arancione caldo, ambra dal 75% e rossa dal 90%; la percentuale diventa rossa dal 90%.
-- **La scintilla:** la scintilla di Claude sta accanto alla sessione. Gira e i suoi raggi respirano mentre usi Claude
-  Code (la sessione è salita rispetto ai numeri precedenti), sta ferma altrimenti, e diventa grigia quando i numeri
+- **Clawd:** la mascotte di Claude Code sta accanto alla sessione e sbatte gli occhi ogni pochi secondi. Cammina sul
+  posto mentre usi Claude Code (la sessione è salita rispetto ai numeri precedenti), e diventa grigio quando i numeri
   sono vecchi.
 - **Azzeramenti:** passata l'ora di azzeramento, la tile conta subito quel limite come 0%, senza aspettare i numeri
   successivi.
