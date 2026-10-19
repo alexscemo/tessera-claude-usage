@@ -2,8 +2,8 @@
 # every name, label and hint below is a key into translations/<language>.json, part "app".
 # Every field is explained in docs/MANIFEST.md of the plugins repository.
 id: claude_usage
-version: 0.1.1
-api: "0.8"
+version: 0.2.0
+api: "0.9"
 icon: robot
 maintainer: alexscemo
 license: MIT
@@ -24,8 +24,8 @@ tiles:
     name: tile_name
     icon: robot
     sizes: { min: 1x1, max: 2x2 }
-    # Worst case, 2x2: a header, two rows of a name, a percentage, a reset time and a bar (track and fill).
-    memory: 1500
+    # Worst case, 2x2: a header, two rows of a name, a percentage, a reset time, a bar and the spark.
+    memory: 1800
     domains: [sensor]
     attributes: [session_pct, session_resets_at, week_pct, week_resets_at, model_pct, model_name, model_resets_at,
                  stale, updated_at]

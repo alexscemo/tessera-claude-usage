@@ -36,9 +36,12 @@ struct Usage {
   std::string model_name;
   const char *blocked = nullptr;  // why the sensor itself gives nothing to show, a key of translations
   bool stale = false;
+  bool working = false;  // the session rose since the numbers before: Claude Code is in use
 
   void read(JsonObjectConst data) {
     JsonObjectConst a = data["attributes"];
+    const float before = pct[SESSION];
+    const uint32_t sent = updated_at;
     static const char *const PCT[LIMITS] = {"session_pct", "week_pct", "model_pct"};
     static const char *const AT[LIMITS] = {"session_resets_at", "week_resets_at", "model_resets_at"};
     for (int i = 0; i < LIMITS; ++i) {
@@ -48,6 +51,8 @@ struct Usage {
     updated_at = a["updated_at"] | 0u;
     model_name = std::string(a["model_name"] | "");
     stale = a["stale"] | false;
+    // Judged once per sending of the computer, not again on a repeat of the same numbers.
+    if (updated_at != sent) working = before >= 0 && pct[SESSION] > before;
     // Before a person has chosen the sensor the tile gets {}; a sensor without a value says unavailable or unknown.
     const std::string state = std::string(data["state"] | ""), wait = std::string(data["wait"] | "");
     blocked = data["state"].isNull() || wait == "wrong_entity"                  ? "choose_sensor"
@@ -102,46 +107,67 @@ static std::string name_of(const tessera::Plugin *plugin, const Usage &u, int li
   return week;
 }
 
-// One limit, in three lines: its percentage large with its name beside it, a bar of how much is used, and a line about
-// when it resets. As large as its room lets it be. The tile and the card both draw with it.
+// The caption of a limit in capitals, as Claude's own pages set their small labels ("WEEK · OPUS"). Only ASCII letters
+// change: a byte of a longer UTF-8 character (the dot, an accent) stays as it is.
+static std::string caps(std::string s) {
+  for (char &ch : s)
+    if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+  return s;
+}
+
+// One limit, in four lines after DESIGN.md: a small caption with its name, its percentage in the largest figures, a
+// thin bar in Claude's warm orange, and a quiet line about when it resets. As large as its room lets it be. The tile and
+// the card both draw with it.
 class Meter {
  public:
-  void make(lv_obj_t *parent, Font name_font) {
-    name_large_ = name_font_ = name_font;
-    pct_ = ui::label(parent, Font::VALUE, theme::INK);
-    name_ = ui::label(parent, name_font, theme::MUTED);
+  void make(lv_obj_t *parent) {
+    name_ = ui::label(parent, Font::BODY, theme::MUTED);
+    pct_ = ui::label(parent, Font::DIGITS, theme::INK);
     track_ = ui::block(parent, theme::TRACK);
-    fill_ = ui::block(parent, theme::ACCENT);
-    when_ = ui::label(parent, Font::BODY, theme::MUTED);
+    fill_ = ui::block(parent, ACCENT);
+    when_ = ui::label(parent, Font::BODY, theme::SUBTLE);
     for (lv_obj_t *l : {name_, pct_, when_}) lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_align(name_, LV_TEXT_ALIGN_RIGHT, 0);
   }
 
-  // The height this needs with `font` for the percentage.
-  static int height(Font font, int bar) { return ui::line_height(font) + bar + 2 * gap() + ui::line_height(Font::BODY); }
+  // The height this needs with `font` for the percentage, with or without the caption over it.
+  static int height(Font font, int bar, bool caption = true) {
+    const int body = ui::line_height(Font::BODY);
+    return (caption ? body + gap() : 0) + ui::line_height(font) + bar + 2 * gap() + body;
+  }
 
-  // Lay it out in x, y, w, h: the percentage takes the largest font that fits the room and leaves some of the width
-  // to the name; the rest sits under it, the whole in the middle of the room.
+  // Lay it out in x, y, w, h: the percentage takes the largest font that fits, the caption goes when even the smallest
+  // does not fit with it, and the whole sits in the middle of the room.
   void place(int x, int y, int w, int h, int bar) {
-    x_ = x;
-    w_ = std::max(1, w);
-    bar_ = bar;
-    for (Font f : {Font::VALUE, Font::HEADLINE, Font::TITLE}) {
-      pct_font_ = f;
-      if (height(f, bar) <= h && ui::text_width("100%", f) <= w_ * 6 / 10) break;
+    w = std::max(1, w);
+    bool caption = true;
+    for (bool c : {true, false}) {
+      caption = c;
+      for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE}) {
+        font_ = f;
+        if (height(f, bar, c) <= h && ui::text_width("100%", f) <= w) break;
+      }
+      if (height(font_, bar, c) <= h) break;
     }
-    line_ = ui::line_height(pct_font_);
-    y_ = y + std::max(0, (h - height(pct_font_, bar)) / 2);
-    painted_pct_ = -1;  // the percentage and the name are placed again on the next paint
-    ui::set_font(pct_, pct_font_);
-    // The name never larger than the percentage beside it.
-    name_font_ = pct_font_ == Font::TITLE ? Font::BODY : name_large_;
-    ui::set_font(name_, name_font_);
-    bar_y_ = y_ + line_ + gap();
-    lv_obj_set_size(track_, w_, bar_);
-    lv_obj_set_pos(track_, x_, bar_y_);
-    lv_obj_set_size(when_, w_, ui::line_height(Font::BODY));
-    lv_obj_set_pos(when_, x_, bar_y_ + bar_ + gap());
+    caption_ = caption;
+    const int body = ui::line_height(Font::BODY), line = ui::line_height(font_);
+    int at = y + std::max(0, (h - height(font_, bar, caption)) / 2);
+    lv_obj_set_size(name_, w, body);
+    lv_obj_set_pos(name_, x, at);
+    if (caption) at += body + gap();
+    figure_y_ = at;
+    ui::set_font(pct_, font_);
+    lv_obj_set_size(pct_, w, line);
+    lv_obj_set_pos(pct_, x, at);
+    at += line + gap();
+    x_ = x;
+    w_ = w;
+    bar_ = bar;
+    bar_y_ = at;
+    lv_obj_set_size(track_, w, bar);
+    lv_obj_set_pos(track_, x, at);
+    lv_obj_set_size(when_, w, body);
+    lv_obj_set_pos(when_, x, at + bar + gap());
+    painted_pct_ = -1;  // the bar is measured again on the next paint
   }
 
   // The texts and the bar; pct < 0 hides it all. `old`: the numbers are not fresh, so they are drawn quieter.
@@ -152,22 +178,12 @@ class Meter {
       return;
     }
     for (lv_obj_t *o : {pct_, track_, when_}) set_hidden(o, false);
-    // Measured and placed only when the percentage or the name changed, not on every tick.
-    if (pct != painted_pct_ || name != painted_name_) {
+    set_hidden(name_, !caption_);
+    ui::set_text(name_, caps(name));
+    ui::set_text(pct_, std::to_string(pct) + "%");
+    // Measured and placed only when the percentage changed, not on every tick.
+    if (pct != painted_pct_) {
       painted_pct_ = pct;
-      painted_name_ = name;
-      // The percentage as wide as it is, the name in what is left of the line, on the percentage's foot.
-      const std::string value = std::to_string(pct) + "%";
-      const int pw = std::min(w_, ui::text_width(value, pct_font_) + ui::px(2));
-      ui::set_text(pct_, value);
-      lv_obj_set_size(pct_, pw, line_);
-      lv_obj_set_pos(pct_, x_, y_);
-      const int space = ui::px(6), nh = ui::line_height(name_font_);
-      const int nw = w_ - pw - space;
-      set_hidden(name_, nw < ui::text_width(name, name_font_) / 2);  // no room: the percentage alone says it
-      ui::set_text(name_, name);
-      lv_obj_set_size(name_, std::max(1, nw), nh);
-      lv_obj_set_pos(name_, x_ + pw + space, y_ + std::max(0, line_ - nh - ui::px(2)));
       const int fw = std::min(w_, w_ * std::clamp(pct, 0, 100) / 100);
       set_hidden(fill_, fw < bar_);  // too short to draw as a rounded bar
       lv_obj_set_size(fill_, std::max(1, fw), bar_);
@@ -175,32 +191,120 @@ class Meter {
     }
     ui::set_tone(pct_, !old && pct >= ALERT_PCT ? Tone::ALERT : Tone::NORMAL, old ? theme::MUTED : theme::INK);
     ui::set_text(when_, when);
-    // The bar in the accent, amber when the limit is nearly used up, grey when the numbers are old.
-    // TODO: once the manifest moves to api 0.9, its block fill by tone replaces fill_role_ and paint_fill().
-    const theme::Role role = old ? theme::MUTED : pct >= BUSY_PCT ? theme::MARK_AMBER : theme::ACCENT;
-    if (role != fill_role_) {
-      fill_role_ = role;
-      paint_fill();
-    }
+    // The bar warm orange, amber when the limit is nearly used up, red at the end, grey when the numbers are old.
+    const Tone tone = old ? Tone::NORMAL : pct >= ALERT_PCT ? Tone::ALERT : pct >= BUSY_PCT ? Tone::BUSY : Tone::NORMAL;
+    ui::set_fill(fill_, tone, old ? theme::MUTED : ACCENT);
   }
 
   void on_theme() {
     ui::set_color(name_, theme::MUTED);
-    ui::set_color(when_, theme::MUTED);
+    ui::set_color(when_, theme::SUBTLE);
     lv_obj_set_style_bg_color(track_, ui::color(theme::TRACK), 0);
-    paint_fill();
   }
 
   static int gap() { return ui::px(ui::large() ? 5 : 3); }
 
- private:
-  void paint_fill() { lv_obj_set_style_bg_color(fill_, ui::color(fill_role_), 0); }
+  // Where the spark goes: at the right end of the percentage's line, about as high as its figures.
+  void spark_box(int &x, int &y, int &size) const {
+    const int line = ui::line_height(font_);
+    size = line * 7 / 10;
+    x = x_ + w_ - size;
+    y = figure_y_ + (line - size) / 2;
+  }
 
-  Font name_font_ = Font::BODY, name_large_ = Font::BODY, pct_font_ = Font::VALUE;
-  theme::Role fill_role_ = theme::ACCENT;
-  int x_ = 0, y_ = 0, w_ = 1, bar_ = 1, bar_y_ = 0, line_ = 1, painted_pct_ = -1;
-  std::string painted_name_;
+ private:
+  // No theme role is Claude's coral (DESIGN.md); the solar orange is the nearest, the same in light and dark.
+  static constexpr theme::Role ACCENT = theme::ENERGY_SOLAR;
+
+  Font font_ = Font::DIGITS;
+  bool caption_ = true;
+  int x_ = 0, w_ = 1, bar_ = 1, bar_y_ = 0, figure_y_ = 0, painted_pct_ = -1;
   lv_obj_t *name_{}, *pct_{}, *track_{}, *fill_{}, *when_{};
+};
+
+// Claude's spark: twelve rays of uneven length from one centre, drawn as one line that goes out to each tip and back.
+// It stands still, and while Claude Code works its rays breathe and it turns slowly, as the spark of Claude's desktop
+// app does while it answers. LVGL moves it frame by frame, as the core moves its own alarm tile.
+class Spark {
+ public:
+  ~Spark() {
+    if (line_) lv_anim_delete(line_, nullptr);  // no frame may reach this after it is gone
+  }
+
+  void make(lv_obj_t *parent) {
+    line_ = lv_line_create(parent);
+    lv_obj_remove_flag(line_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_line_rounded(line_, true, 0);
+    on_theme();
+  }
+
+  void place(int x, int y, int size) {
+    size_ = std::max(6, size);
+    width_ = std::max(2, size_ / 8);
+    lv_obj_set_size(line_, size_, size_);
+    lv_obj_set_pos(line_, x, y);
+    lv_obj_set_style_line_width(line_, width_, 0);
+    draw(phase_);
+  }
+
+  // Grey when the numbers are old, moving while Claude Code works, gone while there are no numbers to stand beside.
+  void paint(bool working, bool old, bool shown) {
+    set_hidden(line_, !shown);
+    working = working && shown;
+    const theme::Role role = old ? theme::MUTED : theme::ENERGY_SOLAR;
+    if (role != role_) {
+      role_ = role;
+      on_theme();
+    }
+    if (working == working_) return;
+    working_ = working;
+    lv_anim_delete(line_, nullptr);
+    if (!working) {
+      draw(0);  // at rest, the spark as Claude draws it
+      return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, line_);
+    lv_anim_set_values(&a, 0, TURN);
+    lv_anim_set_duration(&a, 12000);
+    lv_anim_set_custom_exec_cb(&a, frame);
+    lv_anim_set_user_data(&a, this);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+  }
+
+  void on_theme() { lv_obj_set_style_line_color(line_, ui::color(role_), 0); }
+
+ private:
+  static constexpr int RAYS = 12, TURN = 3600;  // the phase in tenths of a degree: one turn a period
+
+  static void frame(lv_anim_t *a, int32_t phase) { static_cast<Spark *>(lv_anim_get_user_data(a))->draw(phase); }
+
+  void draw(int32_t phase) {
+    // The rays' lengths, and each a little off its even angle, so it reads as drawn by hand as Claude's own.
+    static constexpr float LENGTH[RAYS] = {1.0f, 0.74f, 0.92f, 0.68f, 0.97f, 0.8f, 0.94f, 0.7f, 1.0f, 0.78f, 0.9f, 0.72f};
+    static constexpr float SKEW[RAYS] = {0.0f, 0.06f, -0.04f, 0.05f, -0.03f, 0.04f, 0.0f, -0.05f, 0.03f, -0.04f, 0.05f, -0.02f};
+    constexpr float PI = 3.14159265f;
+    phase_ = phase;
+    const float centre = size_ / 2.0f, reach = centre - width_ / 2.0f, t = phase * 2 * PI / TURN;
+    for (int i = 0; i < RAYS; ++i) {
+      // Moving: one turn a period, and each ray breathes four times in it, each at its own moment.
+      const float breath = working_ ? 0.8f + 0.2f * sinf(4 * t + i * 1.9f) : 1.0f;
+      const float angle = i * 2 * PI / RAYS + SKEW[i] + (working_ ? t : 0), len = reach * LENGTH[i] * breath;
+      points_[2 * i] = {(lv_value_precise_t) centre, (lv_value_precise_t) centre};
+      points_[2 * i + 1] = {(lv_value_precise_t) (centre + len * cosf(angle)),
+                            (lv_value_precise_t) (centre + len * sinf(angle))};
+    }
+    lv_line_set_points(line_, points_, 2 * RAYS);
+  }
+
+  lv_obj_t *line_{};
+  lv_point_precise_t points_[2 * RAYS]{};
+  theme::Role role_ = theme::ENERGY_SOLAR;
+  bool working_ = false;
+  int32_t phase_ = 0;
+  int size_ = 6, width_ = 2;
 };
 
 // The tile. 1x1: the session alone. Wider: the session and the week side by side. Taller: one above the other, under a
@@ -210,7 +314,7 @@ class UsageTile : public tessera::Tile {
   explicit UsageTile(const tessera::Plugin *plugin) : plugin_(plugin) {}
 
   void create(const tessera::TileContext &c) override {
-    const int width = c.width, height = c.height, bar = ui::px(ui::large() ? 8 : 6);
+    const int width = c.width, height = c.height, bar = ui::px(ui::large() ? 6 : 4);
     const std::string name = c.name;
     entity_ = c.entity;
     tile_ = c.tile;
@@ -234,7 +338,7 @@ class UsageTile : public tessera::Tile {
     const int top = head_ ? head : 0;
     const int col_gap = ui::px(ui::large() ? 16 : 10);
     for (int i = 0; i < count_; ++i) {
-      meters_[i].make(c.parent, Font::BODY);
+      meters_[i].make(c.parent);
       if (count_ == 1)
         meters_[i].place(0, 0, width, height, bar);
       else if (stacked) {
@@ -245,6 +349,10 @@ class UsageTile : public tessera::Tile {
         meters_[i].place(i * (w + col_gap), 0, w, height, bar);
       }
     }
+    int x, y, size;
+    meters_[0].spark_box(x, y, size);
+    spark_.make(c.parent);
+    spark_.place(x, y, size);
   }
 
   void on_state(JsonObjectConst data) override { usage_.read(data); }
@@ -263,12 +371,14 @@ class UsageTile : public tessera::Tile {
       meters_[i].paint(name_of(plugin_, usage_, i), usage_.percent(i, now), when, old);
     }
     if (head_) set_hidden(head_, why != nullptr);
+    spark_.paint(usage_.working && !usage_.old(now), usage_.old(now), !why);
   }
 
   void on_theme() override {
     ui::set_color(message_, theme::MUTED);
     if (head_) ui::set_color(head_, theme::INK);
     for (int i = 0; i < count_; ++i) meters_[i].on_theme();
+    spark_.on_theme();
   }
 
   void on_tap() override { tessera::open_card(plugin_->plugin_id(), "usage", entity_, tile_); }
@@ -279,6 +389,7 @@ class UsageTile : public tessera::Tile {
   std::string entity_;
   lv_obj_t *message_{}, *head_{};
   Meter meters_[2];
+  Spark spark_;
   Usage usage_;
 };
 
@@ -291,12 +402,13 @@ class UsageCard : public tessera::Card {
   void open(const tessera::CardContext &c) override {
     width_ = c.width;
     height_ = c.height;
-    bar_ = ui::px(ui::large() ? 12 : 8);
-    for (auto &m : meters_) m.make(c.parent, Font::BODY_LARGE);
+    bar_ = ui::px(ui::large() ? 8 : 6);
+    for (auto &m : meters_) m.make(c.parent);
     note_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_label_set_long_mode(note_, LV_LABEL_LONG_CLIP);
     lv_obj_set_size(note_, width_, ui::line_height(Font::BODY));
     lv_obj_set_pos(note_, 0, height_ - ui::line_height(Font::BODY));
+    spark_.make(c.parent);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -311,6 +423,7 @@ class UsageCard : public tessera::Card {
 
   void on_theme() override {
     for (auto &m : meters_) m.on_theme();
+    spark_.on_theme();
     ui::set_color(note_, theme::MUTED);
     render();
   }
@@ -324,8 +437,11 @@ class UsageCard : public tessera::Card {
     const int room = height_ - ui::line_height(Font::BODY) - gap;
     // Each limit as large as its share of the room, but no larger than its largest figures need: on a large screen
     // they stay together at the top instead of spreading over the glass.
-    const int h = count ? std::min((room - (count - 1) * gap) / count, Meter::height(Font::VALUE, bar_) + gap) : 0;
+    const int h = count ? std::min((room - (count - 1) * gap) / count, Meter::height(Font::DIGITS, bar_) + gap) : 0;
     for (int i = 0; i < count; ++i) meters_[i].place(0, i * (h + gap), width_, h, bar_);
+    int x, y, size;
+    meters_[0].spark_box(x, y, size);
+    spark_.place(x, y, size);
   }
 
   void render() {
@@ -350,6 +466,7 @@ class UsageCard : public tessera::Card {
       if (old) note = note.empty() ? std::string(plugin_->text("old")) : plugin_->text("old") + std::string(" · ") + note;
     }
     ui::set_text(note_, note);
+    spark_.paint(usage_.working && !old, old, !why);
   }
 
   const tessera::Plugin *plugin_;
@@ -357,6 +474,7 @@ class UsageCard : public tessera::Card {
   uint32_t now_ = 0;
   lv_obj_t *note_{};
   Meter meters_[LIMITS];
+  Spark spark_;
   Usage usage_;
 };
 
